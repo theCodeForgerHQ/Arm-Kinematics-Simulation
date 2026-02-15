@@ -1,260 +1,298 @@
 import numpy as np
 import plotly.graph_objects as go
 
-L1, L2, L3 = 1.0, 0.8, 0.6
-TOL = 1e-3
-GAIN = 0.5
-MAX_ITER = 300
-THETA = np.array([np.pi / 6, np.pi / 4, np.pi / 6])
+l1, l2, l3 = 1.0, 0.8, 0.6
+tol = 1e-4
+gain = 0.5
+max_iter = 500
+theta = np.array([0.5, 0.0, 0.0])
 
-xd   = float(input("Enter desired x: "))
-yd   = float(input("Enter desired y: "))
-phid = float(input("Enter desired approach angle (rad): "))
-
-target = np.array([xd, yd])
-
-reach_max = L1 + L2 + L3
-reach_min = max(L1 - L2 - L3, 0)
-dist = np.linalg.norm(target)
-
-if dist > reach_max or dist < reach_min:
-    print(f"Target out of reach. Distance {dist:.4f} not in [{reach_min:.4f}, {reach_max:.4f}]")
-    exit()
+x_des = float(input("Enter desired x: "))
+y_des = float(input("Enter desired y: "))
+phi_des = float(input("Enter desired phi (in radians): "))
 
 
-def jacobian(t):
-    t1, t2, t3 = t
-    s1   = np.sin(t1)
-    s12  = np.sin(t1 + t2)
+def forward_kinematics(theta):
+    t1, t2, t3 = theta
+    x = l1 * np.cos(t1) + l2 * np.cos(t1 + t2) + l3 * np.cos(t1 + t2 + t3)
+    y = l1 * np.sin(t1) + l2 * np.sin(t1 + t2) + l3 * np.sin(t1 + t2 + t3)
+    phi = t1 + t2 + t3
+    return x, y, phi
+
+
+def jacobian(theta):
+    t1, t2, t3 = theta
+    s1 = np.sin(t1)
+    s12 = np.sin(t1 + t2)
     s123 = np.sin(t1 + t2 + t3)
-    c1   = np.cos(t1)
-    c12  = np.cos(t1 + t2)
+    c1 = np.cos(t1)
+    c12 = np.cos(t1 + t2)
     c123 = np.cos(t1 + t2 + t3)
+
     J = np.array([
-        [-L1*s1 - L2*s12 - L3*s123,  -L2*s12 - L3*s123,  -L3*s123],
-        [ L1*c1 + L2*c12 + L3*c123,   L2*c12 + L3*c123,   L3*c123],
-        [ 1.0,                         1.0,                 1.0    ]
+        [
+            -l1 * s1 - l2 * s12 - l3 * s123,
+            -l2 * s12 - l3 * s123,
+            -l3 * s123
+        ],
+        [
+            l1 * c1 + l2 * c12 + l3 * c123,
+            l2 * c12 + l3 * c123,
+            l3 * c123
+        ],
+        [1.0, 1.0, 1.0]
     ])
     return J
 
 
-def forward_kinematics(t):
-    t1, t2, t3 = t
-    x1 = L1 * np.cos(t1)
-    y1 = L1 * np.sin(t1)
-    x2 = x1 + L2 * np.cos(t1 + t2)
-    y2 = y1 + L2 * np.sin(t1 + t2)
-    x3 = x2 + L3 * np.cos(t1 + t2 + t3)
-    y3 = y2 + L3 * np.sin(t1 + t2 + t3)
-    return np.array([[0, x1, x2, x3], [0, y1, y2, y3]])
+r = np.sqrt(x_des**2 + y_des**2)
+
+if r > l1 + l2 + l3:
+    print(f"Target unreachable: distance {r:.4f} exceeds total arm length {l1 + l2 + l3:.4f}.")
+    exit()
+
+if r < max(l1 - l2 - l3, 0):
+    print(f"Target unreachable: distance {r:.4f} is less than minimum reach {max(l1 - l2 - l3, 0):.4f}.")
+    exit()
 
 
-def end_effector_pose(t):
-    pos = forward_kinematics(t)
-    phi = t[0] + t[1] + t[2]
-    return pos[:, -1], phi
+def get_joint_positions(theta):
+    t1, t2, t3 = theta
+    p0 = np.array([0.0, 0.0])
+    p1 = p0 + np.array([l1 * np.cos(t1), l1 * np.sin(t1)])
+    p2 = p1 + np.array([l2 * np.cos(t1 + t2), l2 * np.sin(t1 + t2)])
+    p3 = p2 + np.array([l3 * np.cos(t1 + t2 + t3), l3 * np.sin(t1 + t2 + t3)])
+    return p0, p1, p2, p3
 
 
-theta = THETA.copy()
-frames = []
-frame_labels = []
+frame_data = []
+converged = False
 
-frames.append(forward_kinematics(theta).copy())
-frame_labels.append("Start")
+for i in range(max_iter):
+    x_cur, y_cur, phi_cur = forward_kinematics(theta)
 
-for i in range(MAX_ITER):
-    end_pos, phi_cur = end_effector_pose(theta)
-    ex   = xd - end_pos[0]
-    ey   = yd - end_pos[1]
-    ephi = phid - phi_cur
-    ephi = (ephi + np.pi) % (2 * np.pi) - np.pi
-    err  = np.array([ex, ey, ephi])
+    error = np.array([x_des - x_cur, y_des - y_cur, phi_des - phi_cur])
 
-    if np.linalg.norm(err) < TOL:
-        print(f"Converged at iteration {i}")
+    p0, p1, p2, p3 = get_joint_positions(theta)
+    frame_data.append({
+        "joints": [p0, p1, p2, p3],
+        "error_norm": np.linalg.norm(error),
+        "iteration": i
+    })
+
+    if np.linalg.norm(error) < tol:
+        converged = True
         break
 
-    J      = jacobian(theta)
-    dtheta = GAIN * np.linalg.pinv(J) @ err
-    theta  = theta + dtheta
+    J = jacobian(theta)
+    J_pinv = np.linalg.pinv(J)
+    delta_theta = gain * J_pinv @ error
+    theta = theta + delta_theta
 
-    frames.append(forward_kinematics(theta).copy())
-    frame_labels.append(f"Iter {i + 1}")
-else:
-    print(f"Did not converge within {MAX_ITER} iterations")
+if not converged:
+    print(f"Did not converge within {max_iter} iterations. Final error: {np.linalg.norm(error):.6f}")
+    exit()
 
-pad   = reach_max * 1.2
-W     = "#ffffff"
-W_DIM = "rgba(255,255,255,0.25)"
+print(f"Converged in {len(frame_data)} iterations.")
+print(f"Final joint angles: {np.degrees(theta)} degrees")
 
-plotly_frames = []
-for idx, fpos in enumerate(frames):
-    frame_traces = []
-    for j in range(3):
-        frame_traces.append(go.Scatter(
-            x=fpos[0, j:j+2],
-            y=fpos[1, j:j+2],
-            mode="lines",
-            line=dict(color=W, width=3),
-            showlegend=False
-        ))
-    frame_traces.append(go.Scatter(
-        x=fpos[0],
-        y=fpos[1],
-        mode="markers",
-        marker=dict(color=W, size=10, symbol="circle",
-                    line=dict(color="#000", width=1.5)),
-        showlegend=False
-    ))
-    frame_traces.append(go.Scatter(
-        x=[fpos[0, -1]],
-        y=[fpos[1, -1]],
-        mode="markers",
-        marker=dict(color=W, size=14, symbol="circle",
-                    line=dict(color="#000", width=2)),
-        showlegend=False
-    ))
-    frame_traces.append(go.Scatter(
-        x=[target[0]],
-        y=[target[1]],
-        mode="markers",
-        marker=dict(color=W, size=16, symbol="x",
-                    line=dict(color=W, width=3)),
-        showlegend=False
-    ))
-    plotly_frames.append(go.Frame(data=frame_traces, name=str(idx)))
+total_length = l1 + l2 + l3
+axis_range = [-total_length * 1.3, total_length * 1.3]
 
-init_pos = frames[0]
-init_traces = []
-for j in range(3):
-    init_traces.append(go.Scatter(
-        x=init_pos[0, j:j+2],
-        y=init_pos[1, j:j+2],
+step = max(1, len(frame_data) // 80)
+sampled_indices = list(range(0, len(frame_data), step))
+if (len(frame_data) - 1) not in sampled_indices:
+    sampled_indices.append(len(frame_data) - 1)
+sampled_frames = [frame_data[i] for i in sampled_indices]
+
+
+def make_arm_traces(frame):
+    joints = frame["joints"]
+    p0, p1, p2, p3 = joints
+
+    link_x = [p0[0], p1[0], None, p1[0], p2[0], None, p2[0], p3[0]]
+    link_y = [p0[1], p1[1], None, p1[1], p2[1], None, p2[1], p3[1]]
+
+    link_trace = go.Scatter(
+        x=link_x,
+        y=link_y,
         mode="lines",
-        line=dict(color=W, width=3),
-        name=f"Link {j+1}"
+        line=dict(color="#1a1a2e", width=3),
+        name="Links",
+        showlegend=False
+    )
+
+    joint_x = [p0[0], p1[0], p2[0]]
+    joint_y = [p0[1], p1[1], p2[1]]
+
+    joint_trace = go.Scatter(
+        x=joint_x,
+        y=joint_y,
+        mode="markers",
+        marker=dict(color="#16213e", size=10, symbol="circle",
+                    line=dict(color="#e94560", width=2)),
+        name="Joints",
+        showlegend=False
+    )
+
+    ee_trace = go.Scatter(
+        x=[p3[0]],
+        y=[p3[1]],
+        mode="markers",
+        marker=dict(color="#e94560", size=12, symbol="circle",
+                    line=dict(color="#ffffff", width=2)),
+        name="End-Effector",
+        showlegend=True
+    )
+
+    return [link_trace, joint_trace, ee_trace]
+
+
+target_trace = go.Scatter(
+    x=[x_des],
+    y=[y_des],
+    mode="markers",
+    marker=dict(color="#0f3460", size=14, symbol="x",
+                line=dict(color="#0f3460", width=3)),
+    name="Target",
+    showlegend=True
+)
+
+initial_arm_traces = make_arm_traces(sampled_frames[0])
+
+all_initial_traces = initial_arm_traces + [target_trace]
+
+frames = []
+for idx, frame in enumerate(sampled_frames):
+    arm_traces = make_arm_traces(frame)
+    frame_traces = arm_traces + [target_trace]
+    frames.append(go.Frame(
+        data=frame_traces,
+        name=str(idx)
     ))
-init_traces.append(go.Scatter(
-    x=init_pos[0],
-    y=init_pos[1],
-    mode="markers",
-    marker=dict(color=W, size=10, symbol="circle",
-                line=dict(color="#000", width=1.5)),
-    name="Joints"
-))
-init_traces.append(go.Scatter(
-    x=[init_pos[0, -1]],
-    y=[init_pos[1, -1]],
-    mode="markers",
-    marker=dict(color=W, size=14, symbol="circle",
-                line=dict(color="#000", width=2)),
-    name="End Effector"
-))
-init_traces.append(go.Scatter(
-    x=[target[0]],
-    y=[target[1]],
-    mode="markers",
-    marker=dict(color=W, size=16, symbol="x",
-                line=dict(color=W, width=3)),
-    name="Target"
-))
 
 fig = go.Figure(
-    data=init_traces,
-    frames=plotly_frames,
-    layout=go.Layout(
-        title=dict(
-            text=f"3-Link Planar Arm IK  |  Target: ({xd}, {yd})  φ={phid:.3f} rad",
-            font=dict(color=W, size=18, family="monospace"),
-            x=0.5
-        ),
-        paper_bgcolor="#000000",
-        plot_bgcolor="#000000",
-        xaxis=dict(
-            range=[-pad, pad],
-            zeroline=True,
-            zerolinecolor=W_DIM,
-            gridcolor=W_DIM,
-            tickfont=dict(color=W),
-            title=dict(text="X", font=dict(color=W)),
-            scaleanchor="y"
-        ),
-        yaxis=dict(
-            range=[-pad, pad],
-            zeroline=True,
-            zerolinecolor=W_DIM,
-            gridcolor=W_DIM,
-            tickfont=dict(color=W),
-            title=dict(text="Y", font=dict(color=W))
-        ),
-        legend=dict(
-            font=dict(color=W),
-            bgcolor="#000000",
-            bordercolor=W,
-            borderwidth=1
-        ),
-        updatemenus=[dict(
+    data=all_initial_traces,
+    frames=frames
+)
+
+fig.update_layout(
+    title=dict(
+        text="3-Link Planar Arm — Inverse Kinematics",
+        font=dict(size=18, color="#1a1a2e"),
+        x=0.5,
+        xanchor="center"
+    ),
+    xaxis=dict(
+        range=axis_range,
+        scaleanchor="y",
+        scaleratio=1,
+        showgrid=True,
+        gridcolor="#e8e8e8",
+        gridwidth=1,
+        zeroline=True,
+        zerolinecolor="#cccccc",
+        zerolinewidth=1,
+        showline=True,
+        linecolor="#cccccc",
+        tickfont=dict(size=11, color="#555555"),
+        title=dict(text="x", font=dict(size=13, color="#333333"))
+    ),
+    yaxis=dict(
+        range=axis_range,
+        showgrid=True,
+        gridcolor="#e8e8e8",
+        gridwidth=1,
+        zeroline=True,
+        zerolinecolor="#cccccc",
+        zerolinewidth=1,
+        showline=True,
+        linecolor="#cccccc",
+        tickfont=dict(size=11, color="#555555"),
+        title=dict(text="y", font=dict(size=13, color="#333333"))
+    ),
+    plot_bgcolor="#fafafa",
+    paper_bgcolor="#ffffff",
+    legend=dict(
+        font=dict(size=12, color="#333333"),
+        bgcolor="rgba(255,255,255,0.85)",
+        bordercolor="#dddddd",
+        borderwidth=1,
+        x=0.02,
+        y=0.98
+    ),
+    updatemenus=[
+        dict(
             type="buttons",
             showactive=False,
-            y=0,
+            y=1.12,
             x=0.5,
             xanchor="center",
-            yanchor="top",
             buttons=[
                 dict(
-                    label="Play",
+                    label="▶  Play",
                     method="animate",
-                    args=[None, dict(
-                        frame=dict(duration=40, redraw=True),
-                        fromcurrent=True,
-                        transition=dict(duration=0)
-                    )]
+                    args=[
+                        None,
+                        dict(
+                            frame=dict(duration=40, redraw=True),
+                            fromcurrent=True,
+                            transition=dict(duration=20, easing="linear")
+                        )
+                    ]
                 ),
                 dict(
-                    label="Pause",
+                    label="⏸  Pause",
                     method="animate",
-                    args=[[None], dict(
-                        frame=dict(duration=0, redraw=False),
-                        mode="immediate",
-                        transition=dict(duration=0)
-                    )]
+                    args=[
+                        [None],
+                        dict(
+                            frame=dict(duration=0, redraw=False),
+                            mode="immediate",
+                            transition=dict(duration=0)
+                        )
+                    ]
                 )
             ],
-            font=dict(color="#000000"),
-            bgcolor=W,
-            bordercolor=W
-        )],
-        sliders=[dict(
+            font=dict(size=12, color="#1a1a2e"),
+            bgcolor="#f0f0f0",
+            bordercolor="#cccccc"
+        )
+    ],
+    sliders=[
+        dict(
             steps=[
                 dict(
                     method="animate",
                     args=[[str(k)], dict(
+                        frame=dict(duration=0, redraw=True),
                         mode="immediate",
-                        frame=dict(duration=40, redraw=True),
                         transition=dict(duration=0)
                     )],
-                    label=frame_labels[k]
+                    label=str(k)
                 )
-                for k in range(len(plotly_frames))
+                for k in range(len(sampled_frames))
             ],
-            active=0,
-            x=0.05,
-            len=0.9,
-            y=-0.05,
+            transition=dict(duration=0),
+            x=0.0,
+            y=0,
             currentvalue=dict(
-                font=dict(color=W, size=12),
-                prefix="Step: ",
+                font=dict(size=11, color="#555555"),
+                prefix="Frame: ",
                 visible=True,
                 xanchor="center"
             ),
-            tickcolor=W,
-            font=dict(color=W),
-            bgcolor="#000000",
-            bordercolor=W
-        )]
-    )
+            len=1.0,
+            bgcolor="#f0f0f0",
+            bordercolor="#cccccc"
+        )
+    ],
+    margin=dict(l=60, r=40, t=100, b=80),
+
 )
 
-fig.write_html("arm_sim.html")
-print("Saved to arm_sim.html")
-fig.show()
+import webbrowser, os
+output_path = os.path.abspath("ik_arm_simulation.html")
+fig.write_html(output_path, auto_play=False)
+webbrowser.open(f"file://{output_path}")
+print(f"Simulation saved and opened: {output_path}")
