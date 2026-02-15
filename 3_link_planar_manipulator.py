@@ -288,11 +288,249 @@ fig.update_layout(
         )
     ],
     margin=dict(l=60, r=40, t=100, b=80),
-
 )
 
 import webbrowser, os
-output_path = os.path.abspath("ik_arm_simulation.html")
+output_path = os.path.abspath("ik_arm_convergence_simulation.html")
 fig.write_html(output_path, auto_play=False)
 webbrowser.open(f"file://{output_path}")
 print(f"Simulation saved and opened: {output_path}")
+
+theta_start = np.array([0.5, 0.0, 0.0])
+theta_end_raw = theta.copy()
+
+theta_end_wrapped = np.arctan2(np.sin(theta_end_raw), np.cos(theta_end_raw))
+theta_start_wrapped = np.arctan2(np.sin(theta_start), np.cos(theta_start))
+
+delta = theta_end_wrapped - theta_start_wrapped
+delta = (delta + np.pi) % (2 * np.pi) - np.pi
+theta_end = theta_start_wrapped + delta
+
+movj_frames = 120
+t_raw = np.linspace(0.0, 1.0, movj_frames)
+t_smooth = t_raw * t_raw * (3.0 - 2.0 * t_raw)
+
+movj_thetas = np.array([
+    theta_start_wrapped + s * delta
+    for s in t_smooth
+])
+
+movj_ee_trail_x = []
+movj_ee_trail_y = []
+
+start_joints = get_joint_positions(theta_start)
+
+movj_start_marker = go.Scatter(
+    x=[start_joints[3][0]],
+    y=[start_joints[3][1]],
+    mode="markers",
+    marker=dict(color="#aaaaaa", size=10, symbol="circle-open",
+                line=dict(color="#aaaaaa", width=2)),
+    name="Start",
+    showlegend=True
+)
+
+movj_target_trace = go.Scatter(
+    x=[x_des],
+    y=[y_des],
+    mode="markers",
+    marker=dict(color="#0f3460", size=14, symbol="x",
+                line=dict(color="#0f3460", width=3)),
+    name="Target",
+    showlegend=True
+)
+
+
+def make_movj_arm_traces(joints, ee_trail_x=None, ee_trail_y=None):
+    p0, p1, p2, p3 = joints
+
+    link_x = [p0[0], p1[0], None, p1[0], p2[0], None, p2[0], p3[0]]
+    link_y = [p0[1], p1[1], None, p1[1], p2[1], None, p2[1], p3[1]]
+
+    link_trace = go.Scatter(
+        x=link_x,
+        y=link_y,
+        mode="lines",
+        line=dict(color="#1a1a2e", width=3),
+        name="Links",
+        showlegend=False
+    )
+
+    joint_x = [p0[0], p1[0], p2[0]]
+    joint_y = [p0[1], p1[1], p2[1]]
+
+    joint_trace = go.Scatter(
+        x=joint_x,
+        y=joint_y,
+        mode="markers",
+        marker=dict(color="#16213e", size=10, symbol="circle",
+                    line=dict(color="#e94560", width=2)),
+        name="Joints",
+        showlegend=False
+    )
+
+    ee_trace = go.Scatter(
+        x=[p3[0]],
+        y=[p3[1]],
+        mode="markers",
+        marker=dict(color="#e94560", size=12, symbol="circle",
+                    line=dict(color="#ffffff", width=2)),
+        name="End-Effector",
+        showlegend=True
+    )
+
+    if ee_trail_x is not None and len(ee_trail_x) > 1:
+        trail_trace = go.Scatter(
+            x=list(ee_trail_x),
+            y=list(ee_trail_y),
+            mode="lines",
+            line=dict(color="#e94560", width=1, dash="dot"),
+            opacity=0.45,
+            name="EE Trail",
+            showlegend=False
+        )
+        return [link_trace, joint_trace, ee_trace, trail_trace]
+
+    return [link_trace, joint_trace, ee_trace]
+
+
+movj_initial_joints = get_joint_positions(movj_thetas[0])
+movj_initial_arm = make_movj_arm_traces(movj_initial_joints, None, None)
+movj_initial_data = movj_initial_arm + [movj_start_marker, movj_target_trace]
+
+movj_plotly_frames = []
+for idx, th in enumerate(movj_thetas):
+    joints = get_joint_positions(th)
+    movj_ee_trail_x.append(joints[3][0])
+    movj_ee_trail_y.append(joints[3][1])
+    arm_traces = make_movj_arm_traces(joints, movj_ee_trail_x[:], movj_ee_trail_y[:])
+    frame_traces = arm_traces + [movj_start_marker, movj_target_trace]
+    movj_plotly_frames.append(go.Frame(
+        data=frame_traces,
+        name=str(idx)
+    ))
+
+fig2 = go.Figure(
+    data=movj_initial_data,
+    frames=movj_plotly_frames
+)
+
+fig2.update_layout(
+    title=dict(
+        text="3-Link Planar Arm — MOVJ Joint Interpolation",
+        font=dict(size=18, color="#1a1a2e"),
+        x=0.5,
+        xanchor="center"
+    ),
+    xaxis=dict(
+        range=axis_range,
+        scaleanchor="y",
+        scaleratio=1,
+        showgrid=True,
+        gridcolor="#e8e8e8",
+        gridwidth=1,
+        zeroline=True,
+        zerolinecolor="#cccccc",
+        zerolinewidth=1,
+        showline=True,
+        linecolor="#cccccc",
+        tickfont=dict(size=11, color="#555555"),
+        title=dict(text="x", font=dict(size=13, color="#333333"))
+    ),
+    yaxis=dict(
+        range=axis_range,
+        showgrid=True,
+        gridcolor="#e8e8e8",
+        gridwidth=1,
+        zeroline=True,
+        zerolinecolor="#cccccc",
+        zerolinewidth=1,
+        showline=True,
+        linecolor="#cccccc",
+        tickfont=dict(size=11, color="#555555"),
+        title=dict(text="y", font=dict(size=13, color="#333333"))
+    ),
+    plot_bgcolor="#fafafa",
+    paper_bgcolor="#ffffff",
+    legend=dict(
+        font=dict(size=12, color="#333333"),
+        bgcolor="rgba(255,255,255,0.85)",
+        bordercolor="#dddddd",
+        borderwidth=1,
+        x=0.02,
+        y=0.98
+    ),
+    updatemenus=[
+        dict(
+            type="buttons",
+            showactive=False,
+            y=1.12,
+            x=0.5,
+            xanchor="center",
+            buttons=[
+                dict(
+                    label="▶  Play",
+                    method="animate",
+                    args=[
+                        None,
+                        dict(
+                            frame=dict(duration=33, redraw=True),
+                            fromcurrent=True,
+                            transition=dict(duration=16, easing="linear")
+                        )
+                    ]
+                ),
+                dict(
+                    label="⏸  Pause",
+                    method="animate",
+                    args=[
+                        [None],
+                        dict(
+                            frame=dict(duration=0, redraw=False),
+                            mode="immediate",
+                            transition=dict(duration=0)
+                        )
+                    ]
+                )
+            ],
+            font=dict(size=12, color="#1a1a2e"),
+            bgcolor="#f0f0f0",
+            bordercolor="#cccccc"
+        )
+    ],
+    sliders=[
+        dict(
+            steps=[
+                dict(
+                    method="animate",
+                    args=[[str(k)], dict(
+                        frame=dict(duration=0, redraw=True),
+                        mode="immediate",
+                        transition=dict(duration=0)
+                    )],
+                    label=str(k)
+                )
+                for k in range(movj_frames)
+            ],
+            transition=dict(duration=0),
+            x=0.0,
+            y=0,
+            currentvalue=dict(
+                font=dict(size=11, color="#555555"),
+                prefix="Frame: ",
+                visible=True,
+                xanchor="center"
+            ),
+            len=1.0,
+            bgcolor="#f0f0f0",
+            bordercolor="#cccccc"
+        )
+    ],
+    margin=dict(l=60, r=40, t=100, b=80),
+)
+
+import webbrowser, os
+movj_output_path = os.path.abspath("movj_arm_simulation.html")
+fig2.write_html(movj_output_path, auto_play=False)
+webbrowser.open(f"file://{movj_output_path}")
+print(f"MOVJ simulation saved and opened: {movj_output_path}")
